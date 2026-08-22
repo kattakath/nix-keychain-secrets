@@ -56,6 +56,7 @@ secret get OPENAI_API_KEY          # print one value on demand
 secret OPENAI_API_KEY              # shorthand for `secret get`
 secret ls                          # list registered names (never values)
 secret rm  OPENAI_API_KEY          # delete + unregister
+secret adopt SOME_KEY              # register an item added outside the CLI
 secret load                        # re-load into the CURRENT shell
 ```
 `set-secret` / `remove-secret` remain as back-compat aliases. `set`/`rm`/`load`
@@ -66,7 +67,12 @@ those run as a shell function from the loader).
 
 - **Store:** macOS login Keychain (`security` generic passwords), account = `id -un`.
 - **Index:** one Keychain item (`__set_secret_index__`) holds the space-separated
-  list of managed key names — so `ls`/`load` know what to export.
+  list of managed key names — so `ls`/`load` know what to export. The index is
+  **single-writer**: only `secret set`/`rm` maintain it, so an item added
+  out-of-band (Keychain Access GUI, raw `security add-generic-password`) is
+  found by `secret get` (which warns) but is invisible to `ls` and the loader
+  until you run `secret adopt <KEY>` — which registers it and, as a bonus,
+  rewrites the item so the CLI is on its ACL (no more per-read auth prompts).
 - **Loader:** `~/.config/secrets/loader.sh`, sourced by every shell; loads once
   per tree via an exported sentinel; `SECRETS_DEBUG=1` reports names/lengths/exit
   codes (never values).
