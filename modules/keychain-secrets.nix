@@ -109,12 +109,13 @@ let
         remove-secret() {
           set-secret --remove "$@"
         }
-        # Primary noun-verb interface: `secret <set|get|rm|ls|load|KEY>`. The
-        # mutating verbs update THIS shell (set→export, rm→unset) by delegating to the
-        # set-secret/remove-secret functions above; `load` re-reads the whole store
-        # into the current shell (the fix for a manually-unset var — see the sentinel
-        # caveat above); get/ls/help fall through to the `secret` binary. A bare
-        # `secret KEY` is shorthand for `secret get KEY`.
+        # Primary noun-verb interface: `secret <set|get|rm|ls|adopt|load|KEY>`. The
+        # mutating verbs update THIS shell (set/adopt→export, rm→unset) by delegating
+        # to the set-secret/remove-secret functions above (adopt runs in the binary,
+        # then exports here); `load` re-reads the whole store into the current shell
+        # (the fix for a manually-unset var — see the sentinel caveat above);
+        # get/ls/help fall through to the `secret` binary. A bare `secret KEY` is
+        # shorthand for `secret get KEY`.
         secret() {
           case "''${1:-}" in
             set)
@@ -124,6 +125,16 @@ let
             rm | remove | unset)
               shift
               remove-secret "$@"
+              ;;
+            adopt)
+              shift
+              command secret adopt "$@" || return
+              # A newly-adopted secret goes live in THIS shell too, like `secret set`.
+              case "''${1:-}" in
+                [A-Za-z_]*)
+                  export "$1=$(/usr/bin/security find-generic-password -a "$(/usr/bin/id -un)" -s "$1" -w 2>/dev/null)"
+                  ;;
+              esac
               ;;
             load)
               unset __SECRETS_KEYCHAIN_LOADED
