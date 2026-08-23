@@ -30,6 +30,6 @@ jobs:
             experimental-features = nix-command flakes
       - uses: DeterminateSystems/flakehub-push@v6
         with:
-          name: ismailkattakath/nix-keychain-secrets
+          name: kattakath/nix-keychain-secrets
           visibility: public
           rolling: true

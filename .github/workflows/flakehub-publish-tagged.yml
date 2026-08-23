@@ -24,6 +24,6 @@ jobs:
       - uses: "DeterminateSystems/flakehub-push@main"
         with:
           visibility: "public"
-          name: "ismailkattakath/nix-keychain-secrets"
+          name: "kattakath/nix-keychain-secrets"
           tag: "${{ inputs.tag }}"
           include-output-paths: true
