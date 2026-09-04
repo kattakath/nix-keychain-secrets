@@ -1,6 +1,6 @@
 # nix-keychain-secrets
 
-[![CI](https://github.com/ismailkattakath/nix-keychain-secrets/actions/workflows/ci.yml/badge.svg)](https://github.com/ismailkattakath/nix-keychain-secrets/actions/workflows/ci.yml)
+[![CI](https://github.com/kattakath/nix-keychain-secrets/actions/workflows/ci.yml/badge.svg)](https://github.com/kattakath/nix-keychain-secrets/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Built with Nix](https://img.shields.io/badge/built%20with-Nix-5277C3.svg?logo=nixos&logoColor=white)](https://nixos.org)
 
@@ -36,7 +36,7 @@ exports each value to every descendant.
 
 ```nix
 {
-  inputs.keychain-secrets.url = "github:ismailkattakath/nix-keychain-secrets";
+  inputs.keychain-secrets.url = "github:kattakath/nix-keychain-secrets";
 
   # in your home-manager modules:
   #   keychain-secrets.homeManagerModules.default
