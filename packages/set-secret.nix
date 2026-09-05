@@ -17,7 +17,7 @@
 #                                      read by the login export loop
 #
 # Testing / advanced: export SET_SECRET_KEYCHAIN=/path/to.keychain to target a
-# keychain other than the default login one (used by the self-test).
+# keychain other than the default login one.
 {
   writeShellApplication,
   coreutils,

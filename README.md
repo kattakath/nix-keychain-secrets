@@ -59,7 +59,7 @@ secret rm  OPENAI_API_KEY          # delete + unregister
 secret adopt SOME_KEY              # register an item added outside the CLI
 secret load                        # re-load into the CURRENT shell
 ```
-`set-secret` / `remove-secret` remain as back-compat aliases. `set`/`rm`/`load`
+`set-secret` / `remove-secret` remain as back-compat aliases. `set`/`rm`/`adopt`/`load`
 also update your *current* shell (a bare binary can't touch its parent's env, so
 those run as a shell function from the loader).
 
