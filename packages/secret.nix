@@ -60,7 +60,7 @@ writeShellApplication {
         "  secret copy  <SERVICE|ENV>  to the clipboard, concealed + auto-cleared" \
         "  secret fp    <SERVICE|ENV>  identity of a secret, without its value" \
         "  secret bind   <SERVICE> <ENV>  export SERVICE as \$ENV in every shell" \
-        "  secret unbind <SERVICE>        stop exporting it; readable only via 'secret get'" \
+        "  secret unbind <SERVICE>        stop exporting it; reach it via copy/exec/fp" \
         "  secret adopt <SERVICE>      register a Keychain item added outside this CLI" \
         "  secret load                 reload secrets into the current shell (shell function only)" \
         "" \
