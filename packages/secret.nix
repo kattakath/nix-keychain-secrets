@@ -53,6 +53,7 @@ writeShellApplication {
         "  secret rm    <SERVICE>      delete a secret and unregister it" \
         "  secret ls [--long]          list registered secrets (alias: list)" \
         "  secret exec  [ENV=]SERVICE... -- CMD   run CMD with the secrets in its env" \
+        "  secret copy  <SERVICE|ENV>  to the clipboard, concealed + auto-cleared" \
         "  secret fp    <SERVICE|ENV>  identity of a secret, without its value" \
         "  secret bind   <SERVICE> <ENV>  export SERVICE as \$ENV in every shell" \
         "  secret unbind <SERVICE>        stop exporting it; readable only via 'secret get'" \
@@ -238,6 +239,81 @@ writeShellApplication {
           v=""
         done
         exec "$@"
+        ;;
+      copy | clip | -c)
+        # `secret copy SERVICE` — the HUMAN handoff. Puts the value on the
+        # pasteboard and prints nothing but the fingerprint, so the value never
+        # crosses stdout into a log or an agent transcript.
+        #
+        # NOT `pbcopy`. Measured on this machine: a pbcopy'd value is captured
+        # by Maccy and persisted in a plaintext SQLite store, and it syncs
+        # off-device over Universal Clipboard. `man pbcopy` offers only -help
+        # and -pboard, so it is structurally incapable of setting the pasteboard
+        # types that opt out of either.
+        #
+        # This writes through JXA + the ObjC bridge instead (osascript is built
+        # into macOS — no compiler, no build-time toolchain, unlike a Swift
+        # helper) and sets two things pbcopy cannot:
+        #
+        #   org.nspasteboard.ConcealedType   the nspasteboard.org convention for
+        #     "do not record me". Maccy honours it BY DEFAULT and un-switchably
+        #     (Clipboard.swift ignoredTypes; user prefs can only ADD types).
+        #     Measured: concealed writes get 0 rows, a pbcopy gets several.
+        #   NSPasteboardContentsCurrentHostOnly (prepareForNewContentsWithOptions:1)
+        #     the only documented opt-out from Universal Clipboard / Handoff.
+        #
+        # The value goes in on STDIN, never argv — otherwise `ps -eo args` shows
+        # it. Verified: 0 hits in the osascript process's argv while it holds it.
+        #
+        # Auto-clear mirrors `pass -c` / PASSWORD_STORE_CLIP_TIME. It restores
+        # only if the pasteboard has not changed since (changeCount), so it never
+        # clobbers something you copied in the meantime.
+        #
+        # RESIDUAL RISK, stated plainly: any process can still read the
+        # pasteboard with no permission prompt, and that is not fixable. What
+        # this buys is a bounded window instead of a permanent record — the
+        # alternative, printing to stdout, lands in a transcript kept for 30 days.
+        shift
+        if [ -z "''${1:-}" ]; then
+          echo "secret: copy needs <SERVICE|ENV>. usage: secret copy <SERVICE>" >&2
+          exit 1
+        fi
+        svc="$(resolve "$1")"
+        if ! v="$("$security" find-generic-password -a "$account" -s "$svc" -w "''${kc[@]}" 2>/dev/null)"; then
+          echo "secret: copy: no Keychain item '$svc'" >&2
+          exit 1
+        fi
+        clip_time="''${SECRET_CLIP_TIME:-45}"
+        # shellcheck disable=SC2016  # this is JavaScript: $(...) is the ObjC bridge, not shell
+        cc="$(printf '%s' "$v" | /usr/bin/osascript -l JavaScript -e '
+          ObjC.import("AppKit");
+          const d  = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
+          const val = $.NSString.alloc.initWithDataEncoding(d, $.NSUTF8StringEncoding);
+          const pb = $.NSPasteboard.generalPasteboard;
+          pb.prepareForNewContentsWithOptions(1);
+          const it = $.NSPasteboardItem.alloc.init;
+          it.setStringForType(val, $.NSPasteboardTypeString);
+          it.setStringForType($(""), $("org.nspasteboard.ConcealedType"));
+          pb.writeObjects($.NSArray.arrayWithObject(it));
+          String(pb.changeCount)
+        ' 2>/dev/null)"
+        v=""
+        if [ -z "$cc" ]; then
+          echo "secret: copy: pasteboard write failed" >&2
+          exit 1
+        fi
+        # Clear later, in the background, only if nothing else has copied since.
+        ( sleep "$clip_time"
+          # shellcheck disable=SC2016  # JavaScript, not shell
+          /usr/bin/osascript -l JavaScript -e '
+            function run(argv) {
+              ObjC.import("AppKit");
+              const pb = $.NSPasteboard.generalPasteboard;
+              if (String(pb.changeCount) === argv[0]) { pb.clearContents; }
+              return "";
+            }' "$cc" >/dev/null 2>&1 || true
+        ) >/dev/null 2>&1 &
+        echo "secret: $svc copied — concealed, host-only, clears in ''${clip_time}s."
         ;;
       fp | fingerprint)
         # Identity of a secret, never its value — the question an agent actually

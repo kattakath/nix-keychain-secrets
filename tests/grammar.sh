@@ -164,6 +164,29 @@ ck "fp by ENV matches fp by SERVICE" "$(secret fp app:example.org:api)" "$(secre
 set-secret --remove app:example.org:api >/dev/null 2>&1
 set-secret --remove app:example.org:noenv >/dev/null 2>&1
 
+echo "== 7d. copy — concealed, host-only, auto-cleared =="
+# This one touches the REAL pasteboard (there is no per-process pasteboard to
+# isolate to), so it saves and restores whatever you had copied.
+clip_saved="$(pbpaste 2>/dev/null || true)"
+set-secret --env CPK app:example.net:api FAKE-CLIP-VALUE >/dev/null
+cpout="$(SECRET_CLIP_TIME=3 secret copy app:example.net:api 2>&1)"
+case "$cpout" in *FAKE-CLIP*) r=leaked ;; *) r=clean ;; esac
+ck "copy prints no value bytes" "clean" "$r"
+ck "value reached the pasteboard" "FAKE-CLIP-VALUE" "$(pbpaste)"
+sleep 2
+maccy=~/Library/Containers/org.p0deje.Maccy/Data/Library/Application\ Support/Maccy
+if [ -d "$maccy" ]; then
+  n=0
+  for f in "$maccy"/Storage.sqlite "$maccy"/Storage.sqlite-wal; do
+    n=$((n + $(strings "$f" 2>/dev/null | grep -c 'FAKE-CLIP-VALUE' || true)))
+  done
+  ck "clipboard-history tool did NOT record it (concealed)" "0" "$n"
+fi
+sleep 2
+ck "auto-cleared after SECRET_CLIP_TIME" "" "$(pbpaste)"
+printf '%s' "$clip_saved" | pbcopy
+set-secret --remove app:example.net:api >/dev/null 2>&1
+
 echo "== 8. invalid names rejected =="
 set-secret --env 'bad-env' svc:x:y v >/dev/null 2>&1
 ck "bad ENV rejected" "1" "$?"
