@@ -107,6 +107,17 @@ case " $(idx) " in *" TMP_TOKEN=app:example.com:api "*) r=yes ;; *) r=no ;; esac
 ck "re-bind restores the ENV half" "yes" "$r"
 secret unbind not-registered:x:y >/dev/null 2>&1
 ck "unbind on an unregistered SERVICE exits 1" "1" "$?"
+# The SHELL FUNCTION must pass every verb through. A verb missing from its
+# case arm falls to `*)` -> `secret get <verb>` -> exit 44, which looks like a
+# binary bug. Shipped exactly that for bind/unbind once; assert it here.
+fnwrap="$(sed -n '/^ *secret() {/,/^ *}$/p' "$LOADER")"
+for v in set get rm ls adopt load bind unbind; do
+  case "$fnwrap" in
+    *"$v"*) r=yes ;;
+    *) r=no ;;
+  esac
+  ck "shell function handles '$v'" "yes" "$r"
+done
 set-secret --remove app:example.com:api >/dev/null
 
 echo "== 7. remove by SERVICE =="

@@ -254,6 +254,25 @@ let
               unset __SECRETS_KEYCHAIN_LOADED
               [ -r "${loaderPath}" ] && . "${loaderPath}" || true
               ;;
+            bind | unbind)
+              # MUST be listed explicitly. Anything not matched here falls to the
+              # `*)` arm below and is treated as a KEY to get — so a missing verb
+              # becomes `secret get unbind`, which exits 44 (security(1): item not
+              # found) and reads as a bug in the binary rather than a gap here.
+              # Capture the binding BEFORE the call; afterwards the index no
+              # longer says what it was.
+              __ss_verb="$1"
+              __ss_pre="$(__secrets_bound_env "''${2:-}" || true)"
+              command secret "$@" || {
+                unset __ss_verb __ss_pre
+                return 1
+              }
+              case "$__ss_verb" in
+                unbind) [ -n "$__ss_pre" ] && unset "$__ss_pre" 2>/dev/null ;;
+                bind) __secrets_export "''${2:-}" ;;
+              esac
+              unset __ss_verb __ss_pre
+              ;;
             get | ls | list | -h | --help | "")
               command secret "$@"
               ;;
