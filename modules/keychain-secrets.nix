@@ -5,7 +5,7 @@
 # interactive or not (including the bash an AI coding agent spawns for its tools).
 # Nothing secret (not even the key NAMES) is written to the Nix store or to git.
 #
-# macOS-ONLY: the config is gated on stdenv.isDarwin, so enabling it on a Linux
+# macOS-ONLY: the config is gated on stdenv.hostPlatform.isDarwin, so enabling it on a Linux
 # host is a clean no-op (safe for mixed nix-darwin + NixOS fleets).
 #
 # SECURITY MODEL — read this before enabling: this deliberately makes secrets
@@ -307,7 +307,7 @@ in
   };
 
   # macOS-only: a clean no-op on Linux hosts.
-  config = lib.mkIf (cfg.enable && pkgs.stdenv.isDarwin) {
+  config = lib.mkIf (cfg.enable && pkgs.stdenv.hostPlatform.isDarwin) {
     home.packages = [
       secretCmd
       setSecret
