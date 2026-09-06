@@ -12,6 +12,26 @@
 # AMBIENT in every shell, so any process in the tree (including an AI agent) can
 # read them via `env`. That's the point for laptop/dev API keys, and the wrong
 # model for high-value secrets — use sops-nix/agenix/1Password for those.
+#
+# PRIOR ART DECLINED — why this isn't just envchain. `pkgs.envchain` IS in this
+# repo's pinned nixpkgs (pkgs/by-name/en/envchain/package.nix:41, "Set environment
+# variables with macOS keychain or D-Bus secret service"), and it is the obvious
+# off-the-shelf answer. It does not fit the requirement stated above, for reasons
+# read off its own source (envchain.c:53-61 usage, execvp at :294):
+#   * WRAPPER-SCOPED, not ambient. envchain's only exec form is
+#     `envchain NAMESPACE CMD [ARG ...]` — it execs ONE child with the vars set.
+#     Its usage lists set / exec / list / unset and no ambient or eval mode. The
+#     requirement here is EVERY shell, including the non-interactive bash an agent
+#     spawns per tool call, which nobody gets to wrap.
+#   * No cross-shell load state. The readable-index sentinel below exists so a
+#     LOCKED Keychain retries in a later shell instead of caching an empty load —
+#     state that only makes sense for an ambient loader, so wrapping envchain in a
+#     shell hook would still leave all of this to write.
+#   * `maintainers = [ ]` in nixpkgs (package.nix:45), upstream pinned at v1.1.0.
+# Also grepped the pinned home-manager for an upstream option: no `envchain`
+# anywhere in home-manager/modules, and `programs.keychain` is a name lookalike —
+# the funtoo ssh-agent/gpg-agent wrapper (modules/programs/keychain.nix:28, keys
+# default `id_rsa`), unrelated to the macOS Keychain.
 {
   config,
   lib,
