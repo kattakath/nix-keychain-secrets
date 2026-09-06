@@ -67,6 +67,7 @@ let
           else
             __ss_loaded=0
             __ss_failed=0
+            __ss_skipped=0
             # Peel the SPACE-separated index one token at a time with POSIX parameter
             # expansion — identical in zsh and bash (a `for k in $index` would NOT
             # word-split in zsh). No subshell, so exports land in THIS shell.
@@ -76,13 +77,33 @@ let
               __ss_rest="''${__ss_rest#"$__ss_k"}" # drop it
               __ss_rest="''${__ss_rest# }" # trim one leading space
               [ -n "$__ss_k" ] || continue
-              if __ss_v="$(/usr/bin/security find-generic-password -a "$__ss_account" -s "$__ss_k" -w 2>/dev/null)"; then
-                export "$__ss_k=$__ss_v"
+              # Split ENV=SERVICE on the FIRST '=' — see THE INDEX GRAMMAR in
+              # packages/set-secret.nix, which is the canonical definition. A
+              # bare token (no '=') is the legacy self-binding form.
+              case "$__ss_k" in
+                *=*)
+                  __ss_e="''${__ss_k%%=*}"
+                  __ss_s="''${__ss_k#*=}"
+                  ;;
+                *)
+                  __ss_e="$__ss_k"
+                  __ss_s="$__ss_k"
+                  ;;
+              esac
+              # No ENV half: stored deliberately WITHOUT an env binding, so it
+              # must never become ambient. Read it on demand with `secret get`.
+              if [ -z "$__ss_e" ]; then
+                __ss_skipped=$((__ss_skipped + 1))
+                __ss_dbg "not exported: $__ss_s (no env binding; on-demand only)"
+                continue
+              fi
+              if __ss_v="$(/usr/bin/security find-generic-password -a "$__ss_account" -s "$__ss_s" -w 2>/dev/null)"; then
+                export "$__ss_e=$__ss_v"
                 __ss_loaded=$((__ss_loaded + 1))
-                __ss_dbg "loaded $__ss_k (len=''${#__ss_v})"
+                __ss_dbg "loaded $__ss_s -> \$$__ss_e (len=''${#__ss_v})"
               else
                 __ss_failed=$((__ss_failed + 1))
-                __ss_dbg "MISSING $__ss_k (listed in index but not found in Keychain)"
+                __ss_dbg "MISSING $__ss_s (listed in index but not found in Keychain)"
               fi
             done
             # Sentinel = "index consulted, every listed secret attempted". Set on a
@@ -100,29 +121,96 @@ let
             # Non-interactive bash's only startup hook is $BASH_ENV — propagate it so
             # bash descendants of this (possibly zsh) shell also self-load / short-circuit.
             export BASH_ENV="${loaderPath}"
-            __ss_dbg "done: $__ss_loaded loaded, $__ss_failed missing (sentinel set)"
-            unset __ss_loaded __ss_failed
+            __ss_dbg "done: $__ss_loaded loaded, $__ss_skipped not-exported, $__ss_failed missing (sentinel set)"
+            unset __ss_loaded __ss_failed __ss_skipped
           fi
-          unset __ss_account __ss_index __ss_rc __ss_rest __ss_k __ss_v
+          unset __ss_account __ss_index __ss_rc __ss_rest __ss_k __ss_v __ss_e __ss_s
           unset -f __ss_dbg 2>/dev/null || true
         fi
 
         # -- interactive helpers (defined always; touch the Keychain only if called) --
+        # Resolve SERVICE -> its ENV binding via the index, then export (or, for
+        # an unbound secret, do nothing — that is the point of leaving it
+        # unbound). Shared by set-secret/adopt so one grammar reader serves both.
+        # Prints the bound name on stdout so callers can unset it later.
+        __secrets_bound_env() {
+          __sbe_idx="$(/usr/bin/security find-generic-password -a "$(/usr/bin/id -un)" -s __set_secret_index__ -w 2>/dev/null || true)"
+          __sbe_rest="$__sbe_idx"
+          while [ -n "$__sbe_rest" ]; do
+            __sbe_t="''${__sbe_rest%% *}"
+            __sbe_rest="''${__sbe_rest#"$__sbe_t"}"
+            __sbe_rest="''${__sbe_rest# }"
+            [ -n "$__sbe_t" ] || continue
+            case "$__sbe_t" in
+              *=*)
+                __sbe_e="''${__sbe_t%%=*}"
+                __sbe_s="''${__sbe_t#*=}"
+                ;;
+              *)
+                __sbe_e="$__sbe_t"
+                __sbe_s="$__sbe_t"
+                ;;
+            esac
+            if [ "$__sbe_s" = "$1" ]; then
+              printf '%s' "$__sbe_e"
+              unset __sbe_idx __sbe_rest __sbe_t __sbe_e __sbe_s
+              return 0
+            fi
+          done
+          unset __sbe_idx __sbe_rest __sbe_t __sbe_e __sbe_s
+          return 1
+        }
+        __secrets_export() {
+          __se_env="$(__secrets_bound_env "$1" || true)"
+          if [ -n "$__se_env" ]; then
+            export "$__se_env=$(/usr/bin/security find-generic-password -a "$(/usr/bin/id -un)" -s "$1" -w 2>/dev/null)"
+          fi
+          unset __se_env
+        }
+        # Strip leading `--env NAME` / `--no-export` flags and echo the SERVICE.
+        __secrets_service_arg() {
+          while [ "$#" -gt 0 ]; do
+            case "$1" in
+              --env)
+                shift 2 || return 1
+                ;;
+              --no-export)
+                shift
+                ;;
+              *)
+                printf '%s' "$1"
+                return 0
+                ;;
+            esac
+          done
+          return 1
+        }
         # Persist to (or remove from) the Keychain, then apply the change to THIS
         # shell right away (a bare binary can't mutate its parent's env): an add
         # re-exports the value, a --remove unsets it here too.
         set-secret() {
-          command set-secret "$@" || return
+          # Capture the binding BEFORE a removal — afterwards the index no longer
+          # says which env var this secret was exported as.
+          __ss_fn_pre=""
+          case "''${1:-}" in
+            --remove | -r) __ss_fn_pre="$(__secrets_bound_env "''${2:-}" || true)" ;;
+          esac
+          command set-secret "$@" || {
+            unset __ss_fn_pre
+            return 1
+          }
           case "''${1:-}" in
             --remove | -r)
-              case "''${2:-}" in
-                [A-Za-z_]*) unset "$2" 2>/dev/null || true ;;
-              esac
+              [ -n "$__ss_fn_pre" ] && unset "$__ss_fn_pre" 2>/dev/null
               ;;
-            [A-Za-z_]*)
-              export "$1=$(/usr/bin/security find-generic-password -a "$(/usr/bin/id -un)" -s "$1" -w 2>/dev/null)"
+            *)
+              __ss_fn_svc="$(__secrets_service_arg "$@" || true)"
+              [ -n "$__ss_fn_svc" ] && __secrets_export "$__ss_fn_svc"
+              unset __ss_fn_svc
               ;;
           esac
+          unset __ss_fn_pre
+          return 0
         }
         # Inverse of set-secret: delete + unregister, and unset it from THIS shell.
         # Delegates to the set-secret function so the --remove/unset path is shared.
@@ -149,12 +237,9 @@ let
             adopt)
               shift
               command secret adopt "$@" || return
-              # A newly-adopted secret goes live in THIS shell too, like `secret set`.
-              case "''${1:-}" in
-                [A-Za-z_]*)
-                  export "$1=$(/usr/bin/security find-generic-password -a "$(/usr/bin/id -un)" -s "$1" -w 2>/dev/null)"
-                  ;;
-              esac
+              # A newly-adopted secret goes live in THIS shell too, like `secret set`
+              # — but only if the index actually binds it to an env var.
+              [ -n "''${1:-}" ] && __secrets_export "$1"
               ;;
             load)
               unset __SECRETS_KEYCHAIN_LOADED

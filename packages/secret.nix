@@ -48,23 +48,71 @@ writeShellApplication {
     usage() {
       printf '%s\n' \
         "usage: secret <command> [args]" \
-        "  secret set   <KEY> [VALUE]  store/rotate a secret (hidden prompt if no VALUE)" \
-        "  secret get   <KEY>          print a secret's value (lazy read)" \
-        "  secret rm    <KEY>          delete a secret and unregister it" \
-        "  secret ls                   list every registered secret name (alias: list)" \
-        "  secret adopt <KEY>          register a Keychain item added outside this CLI" \
+        "  secret set [--env E|--no-export] <SERVICE> [VALUE]   store/rotate (hidden prompt if no VALUE)" \
+        "  secret get   <SERVICE|ENV>  print a secret's value (lazy read)" \
+        "  secret rm    <SERVICE>      delete a secret and unregister it" \
+        "  secret ls [--long]          list registered secrets (alias: list)" \
+        "  secret adopt <SERVICE>      register a Keychain item added outside this CLI" \
         "  secret load                 reload secrets into the current shell (shell function only)" \
-        "  secret <KEY>                shorthand for 'secret get <KEY>'" \
+        "  secret <SERVICE|ENV>        shorthand for 'secret get'" \
+        "" \
+        "SERVICE is the canonical id, conventionally <tool>:<host>:<kind>" \
+        "(e.g. glab:gitlab.com:token). ENV is the shell variable it is exported" \
+        "as; a secret with no ENV binding is stored but never made ambient." \
         "aliases: set-secret == 'secret set'  -  remove-secret == 'secret rm'" >&2
     }
 
-    # True iff KEY is registered in the space-separated index item.
+    read_index() {
+      "$security" find-generic-password -a "$account" -s "$index_service" -w "''${kc[@]}" 2>/dev/null || true
+    }
+
+    # Index token halves — see THE INDEX GRAMMAR in packages/set-secret.nix,
+    # which is the canonical definition. Split on the FIRST '='; a bare token
+    # (no '=') is the legacy self-binding form, where ENV == SERVICE.
+    tok_env() { case "$1" in *=*) printf '%s' "''${1%%=*}" ;; *) printf '%s' "$1" ;; esac; }
+    tok_service() { case "$1" in *=*) printf '%s' "''${1#*=}" ;; *) printf '%s' "$1" ;; esac; }
+
+    # True iff SERVICE is registered in the index.
     indexed() {
-      index="$("$security" find-generic-password -a "$account" -s "$index_service" -w "''${kc[@]}" 2>/dev/null || true)"
-      case " $index " in
-        *" $1 "*) return 0 ;;
-        *) return 1 ;;
-      esac
+      rest="$(read_index)"
+      while [ -n "$rest" ]; do
+        t="''${rest%% *}"
+        rest="''${rest#"$t"}"
+        rest="''${rest# }"
+        [ -n "$t" ] || continue
+        [ "$(tok_service "$t")" = "$1" ] && return 0
+      done
+      return 1
+    }
+
+    # Resolve a user-supplied name to its SERVICE: prefer an exact SERVICE
+    # match, then fall back to an ENV match. That fallback is what keeps
+    # `secret get GITLAB_TOKEN` working after the item itself has been renamed
+    # to glab:gitlab.com:token — consumers migrate on their own schedule.
+    resolve() {
+      rest="$(read_index)"
+      while [ -n "$rest" ]; do
+        t="''${rest%% *}"
+        rest="''${rest#"$t"}"
+        rest="''${rest# }"
+        [ -n "$t" ] || continue
+        [ "$(tok_service "$t")" = "$1" ] && { printf '%s' "$1"; return 0; }
+      done
+      rest="$(read_index)"
+      while [ -n "$rest" ]; do
+        t="''${rest%% *}"
+        rest="''${rest#"$t"}"
+        rest="''${rest# }"
+        [ -n "$t" ] || continue
+        e="$(tok_env "$t")"
+        if [ -n "$e" ] && [ "$e" = "$1" ]; then
+          printf '%s' "$(tok_service "$t")"
+          return 0
+        fi
+      done
+      # Unregistered: try it verbatim, so an out-of-band item is still readable.
+      printf '%s' "$1"
+      return 0
     }
 
     # Print KEY's value (stdout stays the bare value, as before). If the item
@@ -72,9 +120,10 @@ writeShellApplication {
     # will not show in `secret ls` and the shell loader (and `secret load`,
     # which walks the same index) will never export it.
     do_get() {
-      if value="$("$security" find-generic-password -a "$account" -s "$1" -w "''${kc[@]}" 2>/dev/null)"; then
+      svc="$(resolve "$1")"
+      if value="$("$security" find-generic-password -a "$account" -s "$svc" -w "''${kc[@]}" 2>/dev/null)"; then
         printf '%s\n' "$value"
-        if ! indexed "$1"; then
+        if ! indexed "$svc"; then
           printf '%s\n' \
             "secret: warning: '$1' exists in the Keychain but is not in the index" \
             "  (added outside this CLI, e.g. via Keychain Access?). It will not appear" \
@@ -138,16 +187,28 @@ writeShellApplication {
         printf '%s\n' "$value" | set-secret "$1"
         ;;
       ls | list)
-        # Print each registered KEY on its own line. Peel the space-separated
-        # index with POSIX parameter expansion (no unquoted word-split, so the
-        # linter stays happy under writeShellApplication's `set -euo pipefail`).
-        index="$("$security" find-generic-password -a "$account" -s "$index_service" -w "''${kc[@]}" 2>/dev/null || true)"
-        rest="$index"
+        # Print each registered SERVICE on its own line; --long adds the ENV it
+        # is exported as ("-" when it is deliberately not exported). Peel the
+        # space-separated index with POSIX parameter expansion (no unquoted
+        # word-split, so the linter stays happy under writeShellApplication's
+        # `set -euo pipefail`).
+        shift
+        long=0
+        [ "''${1:-}" = "--long" ] || [ "''${1:-}" = "-l" ] && long=1
+        rest="$(read_index)"
+        [ "$long" -eq 1 ] && printf '%-34s %s\n' "SERVICE" "ENV"
         while [ -n "$rest" ]; do
           k="''${rest%% *}"
           rest="''${rest#"$k"}"
           rest="''${rest# }"
-          [ -n "$k" ] && echo "$k"
+          [ -n "$k" ] || continue
+          if [ "$long" -eq 1 ]; then
+            e="$(tok_env "$k")"
+            printf '%-34s %s\n' "$(tok_service "$k")" "''${e:--}"
+          else
+            tok_service "$k"
+            printf '\n'
+          fi
         done
         ;;
       load)
