@@ -126,6 +126,22 @@ ck "gone from index" "OPENAI_API_KEY glab:gitlab.com:token" \
   "$(secret ls | tr '\n' ' ' | sed 's/ $//')"
 ck "item deleted" "" "$(secret get vast:gitlab.com:read_repository 2>/dev/null)"
 
+echo "== 7b. stdin input, and no value prefix in output =="
+# `pbpaste` emits NO trailing newline. The old `read -rs` needed a delimiter,
+# returned 1 at EOF, and under `set -e` aborted having stored nothing — while
+# printing a prompt that read like success. That was the common case, not an edge.
+printf 'FAKE-NO-TRAILING-NEWLINE' | set-secret STDIN_KEY >/dev/null 2>&1
+ck "stdin without a trailing newline stores" "24" \
+  "$(secret get STDIN_KEY 2>/dev/null | tr -d '\n' | wc -c | tr -d ' ')"
+# The success line used to print the value's first 4 characters as "proof of
+# round-trip" — a guaranteed 4-byte disclosure into the terminal and transcript
+# on every set. It must report length only.
+out="$(printf 'LEAKYPREFIX-zzz' | set-secret PREFIX_KEY 2>&1)"
+case "$out" in *LEAK*) r=leaked ;; *) r=clean ;; esac
+ck "success message discloses no value prefix" "clean" "$r"
+set-secret --remove STDIN_KEY >/dev/null 2>&1
+set-secret --remove PREFIX_KEY >/dev/null 2>&1
+
 echo "== 8. invalid names rejected =="
 set-secret --env 'bad-env' svc:x:y v >/dev/null 2>&1
 ck "bad ENV rejected" "1" "$?"

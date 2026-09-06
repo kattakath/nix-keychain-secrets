@@ -186,15 +186,25 @@ writeShellApplication {
 
     if [ "$#" -ge 2 ]; then
       value="$2"
+    elif [ ! -t 0 ]; then
+      # Piped stdin — `docker login --password-stdin` semantics, and the ONLY way
+      # to set a secret without it passing through a shell history, an argv, or
+      # this session's transcript. `pbpaste | secret set KEY` is the intended use.
+      #
+      # Read ALL of stdin rather than `read`: `read` needs a delimiter and
+      # returns 1 on a bare EOF, which under `set -e` aborted the command and
+      # stored NOTHING while printing a prompt that looked like success. pbpaste
+      # emits no trailing newline, so that was the common case, not the edge one.
+      value="$(cat)"
     else
-      # No value on the command line: read it hidden so it never hits history/ps.
+      # Interactive: read it hidden so it never hits history/ps.
       printf 'Value for %s: ' "$key" >&2
       IFS= read -rs value
       printf '\n' >&2
-      if [ -z "$value" ]; then
-        echo "set-secret: empty value; nothing stored." >&2
-        exit 1
-      fi
+    fi
+    if [ -z "$value" ]; then
+      echo "set-secret: empty value; nothing stored." >&2
+      exit 1
     fi
 
     # Store the secret encrypted. -U updates the item in place if it exists.
@@ -227,10 +237,14 @@ writeShellApplication {
       echo "set-secret: WARNING — $key did not round-trip out of the Keychain." >&2
       exit 1
     fi
+    # Report LENGTH, never a prefix. The old message printed the first four
+    # characters as "proof of round-trip" — a deliberate, unavoidable four-byte
+    # disclosure into the terminal and this session's transcript on every single
+    # set. Length proves the round-trip just as well and discloses nothing.
     if [ -n "$env_name" ]; then
-      echo "set-secret: stored $key -> \$$env_name (value starts with ''${got:0:4}…)."
+      echo "set-secret: stored $key -> \$$env_name (len=''${#got})."
     else
-      echo "set-secret: stored $key (NOT exported; read with 'secret get $key') (value starts with ''${got:0:4}…)."
+      echo "set-secret: stored $key (NOT exported; read with 'secret get $key') (len=''${#got})."
     fi
   '';
 }
