@@ -41,8 +41,14 @@
 let
   cfg = config.programs.keychainSecrets;
   setSecret = pkgs.callPackage ../packages/set-secret.nix { };
+  # The pasteboard half `secret copy` pipes to. Installed alongside the CLI so
+  # it is usable on its own with any value on stdin, not only via the Keychain.
+  pbConceal = pkgs.callPackage ../packages/pb-conceal.nix { };
   removeSecret = pkgs.callPackage ../packages/remove-secret.nix { set-secret = setSecret; };
-  secretCmd = pkgs.callPackage ../packages/secret.nix { set-secret = setSecret; };
+  secretCmd = pkgs.callPackage ../packages/secret.nix {
+    set-secret = setSecret;
+    pb-conceal = pbConceal;
+  };
   loaderPath = "${config.home.homeDirectory}/${cfg.loaderRelPath}";
 
   # The loader.sh body: a one-time-per-process-tree Keychain load + the
@@ -301,6 +307,7 @@ in
       secretCmd
       setSecret
       removeSecret
+      pbConceal
     ];
 
     # The loader file (a REAL file so $BASH_ENV can name it).
