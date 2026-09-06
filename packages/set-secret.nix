@@ -244,7 +244,7 @@ writeShellApplication {
     if [ -n "$env_name" ]; then
       echo "set-secret: stored $key -> \$$env_name (len=''${#got})."
     else
-      echo "set-secret: stored $key (NOT exported; read with 'secret get $key') (len=''${#got})."
+      echo "set-secret: stored $key (NOT exported; use 'secret copy $key') (len=''${#got})."
     fi
   '';
 }

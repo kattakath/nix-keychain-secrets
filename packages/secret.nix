@@ -2,12 +2,12 @@
 # login-Keychain secret store, in the modern noun-verb CLI shape (git/docker/op
 # style). Verbs:
 #   secret set   <KEY> [VALUE]  store/rotate (hidden prompt if no VALUE)
-#   secret get   <KEY>          print one value on demand (lazy read)
+#   secret reveal <KEY>         PRINT one value (the only printing verb)
 #   secret rm    <KEY>          delete + unregister
 #   secret ls                   list every registered KEY (from the index; `list` also accepted)
 #   secret adopt <KEY>          register a Keychain item added outside this CLI
 #   secret load                 reload secrets into the CURRENT shell — SHELL-FUNCTION ONLY
-#   secret <KEY>                shorthand for `secret get <KEY>`
+#   (no bare `secret <KEY>`, and no `get` — printing is opt-in)
 #
 # The index (`__set_secret_index__`) is SINGLE-WRITER: only this CLI's set/rm
 # maintain it. An item created out-of-band (Keychain Access GUI, raw `security
@@ -53,7 +53,7 @@ writeShellApplication {
       printf '%s\n' \
         "usage: secret <command> [args]" \
         "  secret set [--env E|--no-export] <SERVICE> [VALUE]   store/rotate (hidden prompt if no VALUE)" \
-        "  secret get   <SERVICE|ENV>  print a secret's value (lazy read)" \
+        "  secret reveal <SERVICE|ENV>  PRINT the value to stdout (last resort)" \
         "  secret rm    <SERVICE>      delete a secret and unregister it" \
         "  secret ls [--long]          list registered secrets (alias: list)" \
         "  secret exec  [ENV=]SERVICE... -- CMD   run CMD with the secrets in its env" \
@@ -63,7 +63,9 @@ writeShellApplication {
         "  secret unbind <SERVICE>        stop exporting it; readable only via 'secret get'" \
         "  secret adopt <SERVICE>      register a Keychain item added outside this CLI" \
         "  secret load                 reload secrets into the current shell (shell function only)" \
-        "  secret <SERVICE|ENV>        shorthand for 'secret get'" \
+        "" \
+        "There is no bare 'secret <KEY>' and no 'get': printing is opt-in." \
+        "Prefer copy (to you), exec (to a command), fp (to verify)." \
         "" \
         "SERVICE is the canonical id, conventionally <tool>:<host>:<kind>" \
         "(e.g. glab:gitlab.com:token). ENV is the shell variable it is exported" \
@@ -96,7 +98,7 @@ writeShellApplication {
 
     # Resolve a user-supplied name to its SERVICE: prefer an exact SERVICE
     # match, then fall back to an ENV match. That fallback is what keeps
-    # `secret get GITLAB_TOKEN` working after the item itself has been renamed
+    # `secret reveal GITLAB_TOKEN` working after the item itself has been renamed
     # to glab:gitlab.com:token — consumers migrate on their own schedule.
     resolve() {
       rest="$(read_index)"
@@ -337,13 +339,30 @@ writeShellApplication {
         fi
         exec set-secret --remove "$1"
         ;;
-      get)
+      reveal)
+        # The ONE verb that prints a secret to stdout. Named so it is loud,
+        # greppable and easy to deny in a PreToolUse hook — the point is not
+        # that printing is forbidden, but that it can never happen by accident
+        # or by habit. copy/exec/fp cover every routine case without printing.
         shift
         if [ -z "''${1:-}" ]; then
-          echo "secret: get needs <KEY>. usage: secret get <KEY>" >&2
+          echo "secret: reveal needs <SERVICE|ENV>. usage: secret reveal <SERVICE>" >&2
           exit 1
         fi
         do_get "$1"
+        ;;
+      get)
+        # Deliberately removed rather than aliased. An alias would keep every
+        # old habit and every old script silently printing, which is the thing
+        # this rename exists to stop. Fail loudly and name the alternatives.
+        shift
+        echo "secret: 'get' is gone — it printed secrets into logs and transcripts." >&2
+        printf '%s\n' \
+          "  to hand one to yourself:   secret copy ''${1:-<SERVICE>}" \
+          "  to give one to a command:  secret exec ''${1:-<SERVICE>} -- CMD" \
+          "  to check it is the right:  secret fp ''${1:-<SERVICE>}" \
+          "  to actually print it:      secret reveal ''${1:-<SERVICE>}" >&2
+        exit 1
         ;;
       bind)
         shift
@@ -379,7 +398,7 @@ writeShellApplication {
         )" || true
         rebind "$1" "" || exit 1
         if [ -n "$was" ]; then
-          echo "secret: $1 no longer exported (was \$$was). Read it with: secret get $1"
+          echo "secret: $1 no longer exported (was \$$was). Reach it with: secret copy $1 | secret exec | secret fp"
           echo "  NOTE: still set in ALREADY-RUNNING shells. 'unset $was' here, or open a new shell." >&2
         else
           echo "secret: $1 was already unbound; nothing to do."
@@ -436,9 +455,14 @@ writeShellApplication {
         exit 1
         ;;
       *)
-        # Bare `secret KEY` — treat an unknown first word as a get target. (A
-        # secret literally named after a verb needs the explicit `secret get <verb>`.)
-        do_get "$cmd"
+        # A bare `secret KEY` used to print. That made the most accident-prone
+        # thing also the shortest thing to type, so it is gone too: an unknown
+        # word is now an error, not a silent disclosure.
+        echo "secret: unknown command '$cmd'." >&2
+        printf '%s\n' \
+          "  did you mean:  secret copy $cmd   |   secret exec $cmd -- CMD" \
+          "                 secret fp $cmd     |   secret reveal $cmd" >&2
+        exit 1
         ;;
     esac
   '';

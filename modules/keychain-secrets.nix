@@ -238,7 +238,7 @@ let
         # then exports here); `load` re-reads the whole store into the current shell
         # (the fix for a manually-unset var — see the sentinel caveat above);
         # get/ls/help fall through to the `secret` binary. A bare `secret KEY` is
-        # shorthand for `secret get KEY`.
+        # (no bare-KEY shorthand any more — printing is opt-in.)
         secret() {
           case "''${1:-}" in
             set)
@@ -279,11 +279,16 @@ let
               esac
               unset __ss_verb __ss_pre
               ;;
-            get | ls | list | -h | --help | "")
+            reveal | get | copy | clip | -c | exec | fp | fingerprint | ls | list | -h | --help | "")
+              # Every verb the binary knows MUST be listed. Anything missing
+              # falls to `*)` below, which used to mean "treat it as a KEY and
+              # print it" — a missing verb silently became a disclosure.
               command secret "$@"
               ;;
             *)
-              command secret get "$1"
+              # No longer "print it". The binary refuses unknown words and
+              # names the alternatives; just pass it through and let it say so.
+              command secret "$@"
               ;;
           esac
         }

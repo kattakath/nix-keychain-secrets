@@ -30,7 +30,7 @@ export SET_SECRET_KEYCHAIN="$KC"
 # non-interactive bash at the ACTIVATED loader, so this script starts with
 # `secret`/`set-secret` already shadowed by the wrappers from whatever
 # generation is live — not the binaries under test. A verb the old wrapper
-# does not know (`unbind`) fell through its `*)` arm to `secret get unbind`,
+# does not know (`unbind`) fell through its `*)` arm to `secret reveal unbind`,
 # which exits 44 (security(1): "item could not be found") and looks like a bug
 # in the new code rather than the wrong code being run.
 unset -f secret set-secret remove-secret 2>/dev/null || true
@@ -58,19 +58,19 @@ $1" 2>/dev/null; }
 
 echo "== 1. legacy flat name still self-binds =="
 set-secret OPENAI_API_KEY sk-legacy >/dev/null
-ck "get by flat name" "sk-legacy" "$(secret get OPENAI_API_KEY)"
+ck "get by flat name" "sk-legacy" "$(secret reveal OPENAI_API_KEY)"
 ck "index token is ENV=SERVICE" "OPENAI_API_KEY=OPENAI_API_KEY" \
   "$(security find-generic-password -a "$(id -un)" -s __set_secret_index__ -w "$KC")"
 
 echo "== 2. tool:host:kind with an explicit --env =="
 set-secret --env GITLAB_TOKEN glab:gitlab.com:token glpat-aaa >/dev/null
-ck "get by SERVICE" "glpat-aaa" "$(secret get glab:gitlab.com:token)"
-ck "get by ENV (back-compat after rename)" "glpat-aaa" "$(secret get GITLAB_TOKEN)"
+ck "get by SERVICE" "glpat-aaa" "$(secret reveal glab:gitlab.com:token)"
+ck "get by ENV (back-compat after rename)" "glpat-aaa" "$(secret reveal GITLAB_TOKEN)"
 
 echo "== 3. same host, second credential, different privilege =="
 set-secret --no-export vast:gitlab.com:read_repository glpat-ro >/dev/null
-ck "second gitlab token coexists" "glpat-ro" "$(secret get vast:gitlab.com:read_repository)"
-ck "first one is untouched" "glpat-aaa" "$(secret get glab:gitlab.com:token)"
+ck "second gitlab token coexists" "glpat-ro" "$(secret reveal vast:gitlab.com:read_repository)"
+ck "first one is untouched" "glpat-aaa" "$(secret reveal glab:gitlab.com:token)"
 
 echo "== 4. ls / ls --long =="
 ck "ls prints SERVICE ids" \
@@ -88,8 +88,8 @@ ck "UNBOUND secret is NOT exported under any name" "0" \
 
 echo "== 6. re-set can CHANGE the binding =="
 set-secret --no-export glab:gitlab.com:token glpat-aaa >/dev/null
-ck "binding removed, value kept" "glpat-aaa" "$(secret get glab:gitlab.com:token)"
-ck "ENV lookup no longer resolves" "" "$(secret get GITLAB_TOKEN 2>/dev/null)"
+ck "binding removed, value kept" "glpat-aaa" "$(secret reveal glab:gitlab.com:token)"
+ck "ENV lookup no longer resolves" "" "$(secret reveal GITLAB_TOKEN 2>/dev/null)"
 
 echo "== 6b. bind/unbind change the binding WITHOUT the value =="
 # Asserts on the INDEX, not via the loader: test 5 already proves the loader
@@ -99,7 +99,7 @@ set-secret --env TMP_TOKEN app:example.com:api ex-val >/dev/null
 case " $(idx) " in *" TMP_TOKEN=app:example.com:api "*) r=yes ;; *) r=no ;; esac
 ck "bound: index carries ENV=SERVICE" "yes" "$r"
 secret unbind app:example.com:api >/dev/null
-ck "unbind: value survives untouched" "ex-val" "$(secret get app:example.com:api)"
+ck "unbind: value survives untouched" "ex-val" "$(secret reveal app:example.com:api)"
 case " $(idx) " in *" =app:example.com:api "*) r=yes ;; *) r=no ;; esac
 ck "unbind: index token has no ENV half" "yes" "$r"
 secret bind app:example.com:api TMP_TOKEN >/dev/null
@@ -108,7 +108,7 @@ ck "re-bind restores the ENV half" "yes" "$r"
 secret unbind not-registered:x:y >/dev/null 2>&1
 ck "unbind on an unregistered SERVICE exits 1" "1" "$?"
 # The SHELL FUNCTION must pass every verb through. A verb missing from its
-# case arm falls to `*)` -> `secret get <verb>` -> exit 44, which looks like a
+# case arm falls to `*)` -> `secret reveal <verb>` -> exit 44, which looks like a
 # binary bug. Shipped exactly that for bind/unbind once; assert it here.
 fnwrap="$(sed -n '/^ *secret() {/,/^ *}$/p' "$LOADER")"
 for v in set get rm ls adopt load bind unbind; do
@@ -124,7 +124,7 @@ echo "== 7. remove by SERVICE =="
 set-secret --remove vast:gitlab.com:read_repository >/dev/null
 ck "gone from index" "OPENAI_API_KEY glab:gitlab.com:token" \
   "$(secret ls | tr '\n' ' ' | sed 's/ $//')"
-ck "item deleted" "" "$(secret get vast:gitlab.com:read_repository 2>/dev/null)"
+ck "item deleted" "" "$(secret reveal vast:gitlab.com:read_repository 2>/dev/null)"
 
 echo "== 7b. stdin input, and no value prefix in output =="
 # `pbpaste` emits NO trailing newline. The old `read -rs` needed a delimiter,
@@ -132,7 +132,7 @@ echo "== 7b. stdin input, and no value prefix in output =="
 # printing a prompt that read like success. That was the common case, not an edge.
 printf 'FAKE-NO-TRAILING-NEWLINE' | set-secret STDIN_KEY >/dev/null 2>&1
 ck "stdin without a trailing newline stores" "24" \
-  "$(secret get STDIN_KEY 2>/dev/null | tr -d '\n' | wc -c | tr -d ' ')"
+  "$(secret reveal STDIN_KEY 2>/dev/null | tr -d '\n' | wc -c | tr -d ' ')"
 # The success line used to print the value's first 4 characters as "proof of
 # round-trip" — a guaranteed 4-byte disclosure into the terminal and transcript
 # on every set. It must report length only.
@@ -211,6 +211,22 @@ if command -v pb-conceal >/dev/null; then
   sleep 2
   printf '%s' "$clip_saved2" | pbcopy
 fi
+
+echo "== 7f. printing is opt-in — get is gone, reveal is the one loud verb =="
+set-secret --env RVK rv:example.org:api REVEAL-FAKE-9 >/dev/null
+out="$(secret get rv:example.org:api 2>&1)"; rc=$?
+ck "'get' exits non-zero" "1" "$rc"
+case "$out" in *REVEAL-FAKE-9*) r=leaked ;; *) r=clean ;; esac
+ck "'get' prints no value" "clean" "$r"
+case "$out" in *"secret copy"*"secret exec"*) r=yes ;; *) r=no ;; esac
+ck "'get' names the alternatives" "yes" "$r"
+out="$(secret rv:example.org:api 2>&1)"; rc=$?
+ck "bare 'secret KEY' exits non-zero" "1" "$rc"
+case "$out" in *REVEAL-FAKE-9*) r=leaked ;; *) r=clean ;; esac
+ck "bare 'secret KEY' prints no value" "clean" "$r"
+ck "'reveal' still prints, deliberately" "REVEAL-FAKE-9" "$(secret reveal rv:example.org:api)"
+ck "'reveal' resolves an ENV name too" "REVEAL-FAKE-9" "$(secret reveal RVK)"
+set-secret --remove rv:example.org:api >/dev/null 2>&1
 
 echo "== 8. invalid names rejected =="
 set-secret --env 'bad-env' svc:x:y v >/dev/null 2>&1

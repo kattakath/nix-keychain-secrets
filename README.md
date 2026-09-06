@@ -52,7 +52,7 @@ coverage. The three CLIs are added to `home.packages` automatically.
 
 ```sh
 secret set OPENAI_API_KEY          # hidden prompt (or: secret set KEY value)
-secret get OPENAI_API_KEY          # print one value on demand
+secret reveal OPENAI_API_KEY      # PRINT it (last resort; there is no `get`)
 secret copy glab:gitlab.com:token # to the clipboard, concealed + auto-cleared
 secret exec GH=gh:github.com:pat -- gh pr list   # value only in the child's env
 secret fp  GITLAB_TOKEN           # digest + length + mdat, never the value
