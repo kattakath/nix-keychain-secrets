@@ -58,12 +58,13 @@
           packages = pkgs.lib.optionalAttrs (system == "aarch64-darwin") (
             let
               set-secret = pkgs.callPackage ./packages/set-secret.nix { };
+              pb-conceal = pkgs.callPackage ./packages/pb-conceal.nix { };
             in
             {
-              inherit set-secret;
-              secret = pkgs.callPackage ./packages/secret.nix { inherit set-secret; };
+              inherit set-secret pb-conceal;
+              secret = pkgs.callPackage ./packages/secret.nix { inherit set-secret pb-conceal; };
               remove-secret = pkgs.callPackage ./packages/remove-secret.nix { inherit set-secret; };
-              default = pkgs.callPackage ./packages/secret.nix { inherit set-secret; };
+              default = pkgs.callPackage ./packages/secret.nix { inherit set-secret pb-conceal; };
             }
           );
 
@@ -72,6 +73,7 @@
               [
                 "secret"
                 "set-secret"
+                "pb-conceal"
                 "remove-secret"
               ]
               (name: {
@@ -111,7 +113,12 @@
                 grep -q "secret()" ${loader}
                 echo ok > "$out"
               '';
-              inherit (self.packages.${system}) secret set-secret remove-secret;
+              inherit (self.packages.${system})
+                secret
+                set-secret
+                remove-secret
+                pb-conceal
+                ;
             }
           );
         };

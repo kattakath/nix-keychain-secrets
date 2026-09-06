@@ -187,6 +187,31 @@ ck "auto-cleared after SECRET_CLIP_TIME" "" "$(pbpaste)"
 printf '%s' "$clip_saved" | pbcopy
 set-secret --remove app:example.net:api >/dev/null 2>&1
 
+echo "== 7e. pb-conceal standalone — the seam =="
+# pb-conceal knows nothing about the Keychain: any value on stdin. That is what
+# makes it extractable later as a file move rather than a rewrite.
+command -v pb-conceal >/dev/null || { echo "  SKIP (pb-conceal not on PATH)"; }
+if command -v pb-conceal >/dev/null; then
+  clip_saved2="$(pbpaste 2>/dev/null || true)"
+  pbout="$(printf 'FAKE-PBC-VALUE' | pb-conceal --clear 3 2>&1)"
+  case "$pbout" in *FAKE-PBC*) r=leaked ;; *) r=clean ;; esac
+  ck "pb-conceal prints no value bytes" "clean" "$r"
+  ck "pb-conceal reaches the pasteboard" "FAKE-PBC-VALUE" "$(pbpaste)"
+  sleep 2
+  maccy2=~/Library/Containers/org.p0deje.Maccy/Data/Library/Application\ Support/Maccy
+  if [ -d "$maccy2" ]; then
+    n2=0
+    for f in "$maccy2"/Storage.sqlite "$maccy2"/Storage.sqlite-wal; do
+      n2=$((n2 + $(strings "$f" 2>/dev/null | grep -c 'FAKE-PBC-VALUE' || true)))
+    done
+    ck "pb-conceal output is not recorded by history" "0" "$n2"
+  fi
+  printf 'x' | pb-conceal --clear notanumber >/dev/null 2>&1
+  ck "pb-conceal rejects a non-numeric --clear" "1" "$?"
+  sleep 2
+  printf '%s' "$clip_saved2" | pbcopy
+fi
+
 echo "== 8. invalid names rejected =="
 set-secret --env 'bad-env' svc:x:y v >/dev/null 2>&1
 ck "bad ENV rejected" "1" "$?"

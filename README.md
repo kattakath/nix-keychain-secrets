@@ -53,6 +53,12 @@ coverage. The three CLIs are added to `home.packages` automatically.
 ```sh
 secret set OPENAI_API_KEY          # hidden prompt (or: secret set KEY value)
 secret get OPENAI_API_KEY          # print one value on demand
+secret copy glab:gitlab.com:token # to the clipboard, concealed + auto-cleared
+secret exec GH=gh:github.com:pat -- gh pr list   # value only in the child's env
+secret fp  GITLAB_TOKEN           # digest + length + mdat, never the value
+
+# pb-conceal is the pasteboard half, usable on its own with any value:
+printf %s "$v" | pb-conceal --clear 45
 secret OPENAI_API_KEY              # shorthand for `secret get`
 secret ls                          # list registered names (never values)
 secret rm  OPENAI_API_KEY          # delete + unregister
