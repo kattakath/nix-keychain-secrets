@@ -26,6 +26,15 @@ KC="$HOME/Library/Keychains/zz-kcs-test.keychain-db"
 LOADER="${LOADER:-$HOME/.config/secrets/loader.sh}"
 export SET_SECRET_KEYCHAIN="$KC"
 
+# Drop the shell FUNCTIONS the loader defines. $BASH_ENV points every
+# non-interactive bash at the ACTIVATED loader, so this script starts with
+# `secret`/`set-secret` already shadowed by the wrappers from whatever
+# generation is live — not the binaries under test. A verb the old wrapper
+# does not know (`unbind`) fell through its `*)` arm to `secret get unbind`,
+# which exits 44 (security(1): "item could not be found") and looks like a bug
+# in the new code rather than the wrong code being run.
+unset -f secret set-secret remove-secret 2>/dev/null || true
+
 command -v set-secret >/dev/null || { echo "set-secret not on PATH (nix develop?)" >&2; exit 1; }
 
 security delete-keychain "$KC" >/dev/null 2>&1 || true
@@ -81,6 +90,24 @@ echo "== 6. re-set can CHANGE the binding =="
 set-secret --no-export glab:gitlab.com:token glpat-aaa >/dev/null
 ck "binding removed, value kept" "glpat-aaa" "$(secret get glab:gitlab.com:token)"
 ck "ENV lookup no longer resolves" "" "$(secret get GITLAB_TOKEN 2>/dev/null)"
+
+echo "== 6b. bind/unbind change the binding WITHOUT the value =="
+# Asserts on the INDEX, not via the loader: test 5 already proves the loader
+# honours the binding, and the index is the thing bind/unbind actually edit.
+idx() { security find-generic-password -a "$(id -un)" -s __set_secret_index__ -w "$KC"; }
+set-secret --env TMP_TOKEN app:example.com:api ex-val >/dev/null
+case " $(idx) " in *" TMP_TOKEN=app:example.com:api "*) r=yes ;; *) r=no ;; esac
+ck "bound: index carries ENV=SERVICE" "yes" "$r"
+secret unbind app:example.com:api >/dev/null
+ck "unbind: value survives untouched" "ex-val" "$(secret get app:example.com:api)"
+case " $(idx) " in *" =app:example.com:api "*) r=yes ;; *) r=no ;; esac
+ck "unbind: index token has no ENV half" "yes" "$r"
+secret bind app:example.com:api TMP_TOKEN >/dev/null
+case " $(idx) " in *" TMP_TOKEN=app:example.com:api "*) r=yes ;; *) r=no ;; esac
+ck "re-bind restores the ENV half" "yes" "$r"
+secret unbind not-registered:x:y >/dev/null 2>&1
+ck "unbind on an unregistered SERVICE exits 1" "1" "$?"
+set-secret --remove app:example.com:api >/dev/null
 
 echo "== 7. remove by SERVICE =="
 set-secret --remove vast:gitlab.com:read_repository >/dev/null

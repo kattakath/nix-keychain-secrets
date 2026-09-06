@@ -52,6 +52,8 @@ writeShellApplication {
         "  secret get   <SERVICE|ENV>  print a secret's value (lazy read)" \
         "  secret rm    <SERVICE>      delete a secret and unregister it" \
         "  secret ls [--long]          list registered secrets (alias: list)" \
+        "  secret bind   <SERVICE> <ENV>  export SERVICE as \$ENV in every shell" \
+        "  secret unbind <SERVICE>        stop exporting it; readable only via 'secret get'" \
         "  secret adopt <SERVICE>      register a Keychain item added outside this CLI" \
         "  secret load                 reload secrets into the current shell (shell function only)" \
         "  secret <SERVICE|ENV>        shorthand for 'secret get'" \
@@ -115,6 +117,34 @@ writeShellApplication {
       return 0
     }
 
+    # Rewrite ONLY the index token for SERVICE, leaving the secret value
+    # untouched. Without this, changing a binding meant re-running `set-secret`,
+    # which needs the value again — so flipping a credential to on-demand would
+    # have required reading it out and passing it back in, for a change that
+    # concerns the index alone.
+    rebind() { # rebind <SERVICE> <ENV|"">
+      if ! indexed "$1"; then
+        echo "secret: '$1' is not registered; nothing to rebind (see 'secret ls')." >&2
+        return 1
+      fi
+      if [ -n "$2" ] && ! printf '%s' "$2" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$'; then
+        echo "secret: invalid ENV '$2' (must match [A-Za-z_][A-Za-z0-9_]*)" >&2
+        return 1
+      fi
+      if [ -n "$2" ]; then new_tok="$2=$1"; else new_tok="=$1"; fi
+      out=""
+      rest="$(read_index)"
+      while [ -n "$rest" ]; do
+        t="''${rest%% *}"
+        rest="''${rest#"$t"}"
+        rest="''${rest# }"
+        [ -n "$t" ] || continue
+        [ "$(tok_service "$t")" = "$1" ] && t="$new_tok"
+        if [ -n "$out" ]; then out="$out $t"; else out="$t"; fi
+      done
+      "$security" add-generic-password -U -a "$account" -s "$index_service" -w "$out" "''${kc[@]}"
+    }
+
     # Print KEY's value (stdout stays the bare value, as before). If the item
     # exists but is NOT in the index — added out-of-band — warn on stderr: it
     # will not show in `secret ls` and the shell loader (and `secret load`,
@@ -165,6 +195,46 @@ writeShellApplication {
           exit 1
         fi
         do_get "$1"
+        ;;
+      bind)
+        shift
+        if [ -z "''${1:-}" ] || [ -z "''${2:-}" ]; then
+          echo "secret: bind needs <SERVICE> <ENV>. usage: secret bind <SERVICE> <ENV>" >&2
+          exit 1
+        fi
+        rebind "$1" "$2" || exit 1
+        echo "secret: $1 -> \$$2 (exported in every NEW shell; 'secret load' to apply here)"
+        ;;
+      unbind)
+        shift
+        if [ -z "''${1:-}" ]; then
+          echo "secret: unbind needs <SERVICE>. usage: secret unbind <SERVICE>" >&2
+          exit 1
+        fi
+        # `|| true` + a trailing `true`: this runs under writeShellApplication's
+        # `set -e`, and a loop whose LAST iteration fails its test leaves the
+        # subshell non-zero, which killed the whole command with no message.
+        was="$(
+          rest="$(read_index)"
+          while [ -n "$rest" ]; do
+            t="''${rest%% *}"
+            rest="''${rest#"$t"}"
+            rest="''${rest# }"
+            [ -n "$t" ] || continue
+            if [ "$(tok_service "$t")" = "$1" ]; then
+              tok_env "$t"
+              break
+            fi
+          done
+          true
+        )" || true
+        rebind "$1" "" || exit 1
+        if [ -n "$was" ]; then
+          echo "secret: $1 no longer exported (was \$$was). Read it with: secret get $1"
+          echo "  NOTE: still set in ALREADY-RUNNING shells. 'unset $was' here, or open a new shell." >&2
+        else
+          echo "secret: $1 was already unbound; nothing to do."
+        fi
         ;;
       adopt)
         shift
