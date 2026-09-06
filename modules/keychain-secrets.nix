@@ -57,10 +57,19 @@ let
             return 0
           }
           __ss_account="$(/usr/bin/id -un)"
+          # Honour SET_SECRET_KEYCHAIN like `secret` and `set-secret` do. Without
+          # this the loader was the ONE component that always read the login
+          # keychain, so a test that sourced it silently operated on real
+          # secrets while believing it was isolated — which is exactly how a
+          # live value ends up echoed into a log. Not a privilege boundary:
+          # anything able to set this variable can already read the environment
+          # it would be loading into.
+          __ss_kc=""
+          if [ -n "''${SET_SECRET_KEYCHAIN:-}" ]; then __ss_kc="$SET_SECRET_KEYCHAIN"; fi
           # Capture the index read's exit code: rc != 0 means the index item is
           # UNREADABLE (Keychain locked, or nothing registered yet) — distinct from a
           # readable-but-empty index. Only a readable index sets the sentinel.
-          __ss_index="$(/usr/bin/security find-generic-password -a "$__ss_account" -s __set_secret_index__ -w 2>/dev/null)"
+          __ss_index="$(/usr/bin/security find-generic-password -a "$__ss_account" -s __set_secret_index__ -w ''${__ss_kc:+"$__ss_kc"} 2>/dev/null)"
           __ss_rc=$?
           if [ "$__ss_rc" -ne 0 ]; then
             __ss_dbg "index unreadable (rc=$__ss_rc): Keychain locked or no secrets registered; NOT caching — a later shell will retry"
@@ -97,7 +106,7 @@ let
                 __ss_dbg "not exported: $__ss_s (no env binding; on-demand only)"
                 continue
               fi
-              if __ss_v="$(/usr/bin/security find-generic-password -a "$__ss_account" -s "$__ss_s" -w 2>/dev/null)"; then
+              if __ss_v="$(/usr/bin/security find-generic-password -a "$__ss_account" -s "$__ss_s" -w ''${__ss_kc:+"$__ss_kc"} 2>/dev/null)"; then
                 export "$__ss_e=$__ss_v"
                 __ss_loaded=$((__ss_loaded + 1))
                 __ss_dbg "loaded $__ss_s -> \$$__ss_e (len=''${#__ss_v})"
@@ -124,7 +133,7 @@ let
             __ss_dbg "done: $__ss_loaded loaded, $__ss_skipped not-exported, $__ss_failed missing (sentinel set)"
             unset __ss_loaded __ss_failed __ss_skipped
           fi
-          unset __ss_account __ss_index __ss_rc __ss_rest __ss_k __ss_v __ss_e __ss_s
+          unset __ss_account __ss_kc __ss_index __ss_rc __ss_rest __ss_k __ss_v __ss_e __ss_s
           unset -f __ss_dbg 2>/dev/null || true
         fi
 
@@ -134,7 +143,7 @@ let
         # unbound). Shared by set-secret/adopt so one grammar reader serves both.
         # Prints the bound name on stdout so callers can unset it later.
         __secrets_bound_env() {
-          __sbe_idx="$(/usr/bin/security find-generic-password -a "$(/usr/bin/id -un)" -s __set_secret_index__ -w 2>/dev/null || true)"
+          __sbe_idx="$(/usr/bin/security find-generic-password -a "$(/usr/bin/id -un)" -s __set_secret_index__ -w ''${SET_SECRET_KEYCHAIN:+"$SET_SECRET_KEYCHAIN"} 2>/dev/null || true)"
           __sbe_rest="$__sbe_idx"
           while [ -n "$__sbe_rest" ]; do
             __sbe_t="''${__sbe_rest%% *}"
@@ -163,7 +172,7 @@ let
         __secrets_export() {
           __se_env="$(__secrets_bound_env "$1" || true)"
           if [ -n "$__se_env" ]; then
-            export "$__se_env=$(/usr/bin/security find-generic-password -a "$(/usr/bin/id -un)" -s "$1" -w 2>/dev/null)"
+            export "$__se_env=$(/usr/bin/security find-generic-password -a "$(/usr/bin/id -un)" -s "$1" -w ''${SET_SECRET_KEYCHAIN:+"$SET_SECRET_KEYCHAIN"} 2>/dev/null)"
           fi
           unset __se_env
         }
