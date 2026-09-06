@@ -6,6 +6,8 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     home-manager.url = "github:nix-community/home-manager";
     home-manager.inputs.nixpkgs.follows = "nixpkgs";
+    treefmt-nix.url = "github:numtide/treefmt-nix";
+    treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   nixConfig = {
@@ -23,6 +25,8 @@
       ...
     }:
     flake-parts.lib.mkFlake { inherit inputs; } {
+      imports = [ inputs.treefmt-nix.flakeModule ];
+
       # formatter runs on all 3; the CLI/module itself is macOS-only (every app
       # shells out to /usr/bin/security), gated per-system below.
       systems = [
@@ -40,7 +44,15 @@
       perSystem =
         { pkgs, system, ... }:
         {
-          formatter = pkgs.nixfmt-rfc-style;
+          # treefmt owns `nix fmt` and supplies its own `checks.treefmt` gate, so CI
+          # needs no hand-rolled formatting step: `nix flake check` runs the formatter
+          # from THIS flake's lock instead of the runner's ambient registry.
+          treefmt = {
+            projectRootFile = "flake.nix";
+            programs.nixfmt.enable = true;
+            programs.deadnix.enable = true;
+            programs.statix.enable = true;
+          };
 
           # The CLIs, also runnable directly (macOS-only).
           packages = pkgs.lib.optionalAttrs (system == "aarch64-darwin") (
