@@ -6,8 +6,8 @@ most welcome.
 ## Dev loop
 
 ```sh
-nix flake check                          # build packages (shellcheck) + module eval
-nix run nixpkgs#nixfmt-rfc-style -- .     # format all .nix (CI enforces this)
+nix flake check                          # build packages (shellcheck) + module eval + `treefmt`
+nix fmt                                  # treefmt: nixfmt + deadnix + statix, from THIS flake's lock
 nix build .#packages.aarch64-darwin.secret
 ```
 
@@ -20,5 +20,5 @@ nix build .#packages.aarch64-darwin.secret
 - Keep the every-shell model intact (`.zshenv` + `.bash_profile` + `.bashrc` +
   `$BASH_ENV`, one-time-per-tree sentinel).
 - Be honest in docs about the ambient-secrets threat model.
-- Update `README.md` for user-facing changes; CI (format + build + module eval)
-  must pass.
+- Update `README.md` for user-facing changes; `nix flake check` (treefmt + build +
+  module eval) must pass — that one command *is* CI.
