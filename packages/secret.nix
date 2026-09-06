@@ -52,6 +52,8 @@ writeShellApplication {
         "  secret get   <SERVICE|ENV>  print a secret's value (lazy read)" \
         "  secret rm    <SERVICE>      delete a secret and unregister it" \
         "  secret ls [--long]          list registered secrets (alias: list)" \
+        "  secret exec  [ENV=]SERVICE... -- CMD   run CMD with the secrets in its env" \
+        "  secret fp    <SERVICE|ENV>  identity of a secret, without its value" \
         "  secret bind   <SERVICE> <ENV>  export SERVICE as \$ENV in every shell" \
         "  secret unbind <SERVICE>        stop exporting it; readable only via 'secret get'" \
         "  secret adopt <SERVICE>      register a Keychain item added outside this CLI" \
@@ -166,8 +168,118 @@ writeShellApplication {
       fi
     }
 
+    # The ENV a SERVICE is bound to, or empty. `|| true` + trailing `true`:
+    # a loop whose last iteration fails its test leaves the subshell non-zero,
+    # which under `set -e` kills the caller with no message.
+    bound_env() {
+      rest="$(read_index)"
+      while [ -n "$rest" ]; do
+        t="''${rest%% *}"
+        rest="''${rest#"$t"}"
+        rest="''${rest# }"
+        [ -n "$t" ] || continue
+        if [ "$(tok_service "$t")" = "$1" ]; then
+          tok_env "$t"
+          return 0
+        fi
+      done
+      return 0
+    }
+
     cmd="''${1:-}"
     case "$cmd" in
+      exec)
+        # `secret exec [ENV=]SERVICE... -- CMD [ARGS]` — put the values in the
+        # CHILD's environment and exec. The value never crosses stdout, so it
+        # cannot land in a log or an agent transcript. This is the egress meant
+        # for machines. Borrowed from `envchain NS CMD`, `chamber exec` and
+        # `op run`, which all solve exactly this.
+        #
+        # The ENV=SERVICE argument form is the index grammar (see
+        # set-secret.nix), so a name reads the same here as it does in the
+        # store. A bare SERVICE uses whatever ENV the index binds it to; an
+        # unbound one must be spelled ENV=SERVICE, because there is nothing to
+        # infer and guessing a variable name would silently authenticate
+        # nothing.
+        shift
+        specs=()
+        while [ "$#" -gt 0 ]; do
+          if [ "$1" = "--" ]; then
+            shift
+            break
+          fi
+          specs+=("$1")
+          shift
+        done
+        if [ "''${#specs[@]}" -eq 0 ] || [ "$#" -eq 0 ]; then
+          echo "secret: usage: secret exec [ENV=]SERVICE... -- CMD [ARGS]" >&2
+          exit 1
+        fi
+        for spec in "''${specs[@]}"; do
+          case "$spec" in
+            *=*)
+              e="''${spec%%=*}"
+              svc="''${spec#*=}"
+              ;;
+            *)
+              svc="$(resolve "$spec")"
+              e="$(bound_env "$svc")"
+              if [ -z "$e" ]; then
+                echo "secret: '$spec' has no env binding; spell it ENV=$svc" >&2
+                exit 1
+              fi
+              ;;
+          esac
+          if ! v="$("$security" find-generic-password -a "$account" -s "$svc" -w "''${kc[@]}" 2>/dev/null)"; then
+            echo "secret: exec: no Keychain item '$svc'" >&2
+            exit 1
+          fi
+          export "$e=$v"
+          v=""
+        done
+        exec "$@"
+        ;;
+      fp | fingerprint)
+        # Identity of a secret, never its value — the question an agent actually
+        # needs answered ("did the rotation land?", "is this the same value?").
+        #
+        # mdat comes free: `security find-generic-password` WITHOUT -w/-g prints
+        # the item's metadata and no value at all. Same answer GitHub's
+        # `updated_at` and `fly secrets list` give.
+        #
+        # The digest is HMAC-SHA256 under a machine-local random salt, truncated
+        # to 12 base64 chars (~72 bits). The salt is the load-bearing part: a
+        # bare truncated hash of a low-entropy secret is dictionary-attackable.
+        # Same reasoning as HIBP's k-anonymity range API. Format mirrors
+        # `ssh-add -l`. NOT an interop format — the salt is local, so nobody
+        # else can reproduce these digests, and that is deliberate.
+        shift
+        if [ -z "''${1:-}" ]; then
+          echo "secret: fp needs <SERVICE|ENV>. usage: secret fp <SERVICE>" >&2
+          exit 1
+        fi
+        svc="$(resolve "$1")"
+        if ! v="$("$security" find-generic-password -a "$account" -s "$svc" -w "''${kc[@]}" 2>/dev/null)"; then
+          echo "secret: fp: no Keychain item '$svc'" >&2
+          exit 1
+        fi
+        salt_service="__secret_fp_salt__"
+        if ! salt="$("$security" find-generic-password -a "$account" -s "$salt_service" -w "''${kc[@]}" 2>/dev/null)"; then
+          salt="$(/usr/bin/openssl rand -base64 32)"
+          "$security" add-generic-password -U -a "$account" -s "$salt_service" -w "$salt" "''${kc[@]}"
+        fi
+        digest="$(printf '%s' "$v" | /usr/bin/openssl dgst -sha256 -hmac "$salt" -binary | /usr/bin/openssl base64 -A | cut -c1-12)"
+        # Metadata WITHOUT -w/-g: prints attributes, never the value. The mdat
+        # line looks like:  "mdat"<timedate>=0x...  "20260906182027Z"
+        # security(1) renders the trailing NUL of the timedate blob literally as
+        # the four characters \000 — strip it rather than shipping it in output.
+        mdat="$("$security" find-generic-password -a "$account" -s "$svc" "''${kc[@]}" 2>&1 |
+          awk -F'"' '/"mdat"/ { print $(NF - 1) }' | head -1)"
+        mdat="''${mdat%%\\000}"
+        printf '%-34s sha256:%s  len=%s  mdat=%s\n' "$svc" "$digest" "''${#v}" "''${mdat:-unknown}"
+        v=""
+        salt=""
+        ;;
       -h | --help)
         usage
         exit 0

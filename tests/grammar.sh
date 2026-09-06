@@ -142,6 +142,28 @@ ck "success message discloses no value prefix" "clean" "$r"
 set-secret --remove STDIN_KEY >/dev/null 2>&1
 set-secret --remove PREFIX_KEY >/dev/null 2>&1
 
+echo "== 7c. exec and fp — the two non-printing egress paths =="
+set-secret --env EXK app:example.org:api FAKE-EXEC-VALUE >/dev/null
+ck "exec puts the value in the CHILD env" "15" \
+  "$(secret exec app:example.org:api -- sh -c 'printf %s "${#EXK}"')"
+out="$(secret exec app:example.org:api -- sh -c 'echo done' 2>&1)"
+case "$out" in *FAKE-EXEC*) r=leaked ;; *) r=clean ;; esac
+ck "exec never puts the value on OUR stdout" "clean" "$r"
+secret exec ZZ=app:example.org:api -- sh -c 'exit 0'
+ck "explicit ENV=SERVICE form works" "0" "$?"
+set-secret --no-export app:example.org:noenv FAKE-UNBOUND >/dev/null
+secret exec app:example.org:noenv -- true >/dev/null 2>&1
+ck "unbound SERVICE without ENV= is refused" "1" "$?"
+# fp must describe the secret without reproducing any of it.
+fpout="$(secret fp app:example.org:api 2>&1)"
+case "$fpout" in *FAKE-EXEC*) r=leaked ;; *) r=clean ;; esac
+ck "fp discloses no value bytes" "clean" "$r"
+case "$fpout" in *"sha256:"*"len=15"*"mdat=20"*) r=yes ;; *) r=no ;; esac
+ck "fp reports digest + len + mdat" "yes" "$r"
+ck "fp by ENV matches fp by SERVICE" "$(secret fp app:example.org:api)" "$(secret fp EXK)"
+set-secret --remove app:example.org:api >/dev/null 2>&1
+set-secret --remove app:example.org:noenv >/dev/null 2>&1
+
 echo "== 8. invalid names rejected =="
 set-secret --env 'bad-env' svc:x:y v >/dev/null 2>&1
 ck "bad ENV rejected" "1" "$?"
